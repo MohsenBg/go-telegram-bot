@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"tel-bot/internal/env"
 	"tel-bot/internal/logger"
 	"tel-bot/internal/models"
@@ -31,12 +32,12 @@ var StepMessages = map[int]string{
 }
 
 // ------------------- In-Memory Chat Storage -------------------
-var usersChat = make(map[int64]*models.UserChat)
+var usersChat sync.Map // key: int64, value: *models.UserChat
 
 // ------------------- Password Protection -------------------
 const defaultPassword = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
 
-var waitingForPassword = make(map[int64]bool)
+var waitingForPassword sync.Map // key: int64, value: bool
 
 // ------------------- Public Handler -------------------
 func HandleMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
@@ -44,8 +45,8 @@ func HandleMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
 
 	// Restart on /start
 	if text == "/start" {
-		delete(usersChat, chatID)
-		usersChat[chatID] = &models.UserChat{Step: 1}
+		usersChat.Delete(chatID)
+		usersChat.Store(chatID, &models.UserChat{Step: 1})
 		sendAndLog(bot, chatID, StepMessages[0])
 		sendAndLog(bot, chatID, StepMessages[1])
 		return
@@ -53,15 +54,15 @@ func HandleMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
 
 	// Protected Excel export
 	if text == "/get_users" {
-		waitingForPassword[chatID] = true
+		waitingForPassword.Store(chatID, true)
 		sendAndLog(bot, chatID, "🔑 لطفاً رمز عبور را وارد کنید:")
 		return
 	}
 
 	// Check if user is entering password
-	if waitingForPassword[chatID] {
+	if val, ok := waitingForPassword.Load(chatID); ok && val.(bool) {
 		if hashPassword(text) == env.GetEnvString("PASSWORD", defaultPassword) {
-			delete(waitingForPassword, chatID)
+			waitingForPassword.Delete(chatID)
 			SendUsersExcel(bot, chatID)
 		} else {
 			sendAndLog(bot, chatID, "❌ رمز عبور اشتباه است")
@@ -69,14 +70,17 @@ func HandleMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
 		return
 	}
 
-	if _, exists := usersChat[chatID]; !exists {
-		usersChat[chatID] = &models.UserChat{Step: 1}
+	// Load or create user chat
+	val, exists := usersChat.Load(chatID)
+	if !exists {
+		userChat := &models.UserChat{Step: 1}
+		usersChat.Store(chatID, userChat)
 		sendAndLog(bot, chatID, StepMessages[0])
 		sendAndLog(bot, chatID, StepMessages[1])
 		return
 	}
 
-	userChat := usersChat[chatID]
+	userChat := val.(*models.UserChat)
 
 	switch userChat.Step {
 	case 1:
@@ -216,10 +220,12 @@ func promptMajor(bot *tgbotapi.BotAPI, chatID int64) {
 // ------------------- Handle Callback -------------------
 func HandleCallback(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery) {
 	chatID := callback.Message.Chat.ID
-	userChat, exists := usersChat[chatID]
-	if !exists {
+
+	val, ok := usersChat.Load(chatID)
+	if !ok {
 		return
 	}
+	userChat := val.(*models.UserChat)
 
 	data := callback.Data
 
@@ -252,8 +258,8 @@ func HandleCallback(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery) {
 		userChat.Step = 9
 
 	case data == "cancel":
-		delete(usersChat, chatID)
-		usersChat[chatID] = &models.UserChat{Step: 1}
+		usersChat.Delete(chatID)
+		usersChat.Store(chatID, &models.UserChat{Step: 1})
 		sendAndLog(bot, chatID, "❌ اطلاعات پاک شد. لطفاً دوباره نام و نام خانوادگی خود را وارد کنید.")
 		sendAndLog(bot, chatID, StepMessages[1])
 	}

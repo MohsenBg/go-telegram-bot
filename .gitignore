@@ -2,4 +2,4 @@
 .env
 .DS_store
 telbot.db
-bot.log
+bot*.log

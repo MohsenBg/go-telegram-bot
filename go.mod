@@ -19,4 +19,5 @@ require (
 	golang.org/x/crypto v0.38.0 // indirect
 	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
